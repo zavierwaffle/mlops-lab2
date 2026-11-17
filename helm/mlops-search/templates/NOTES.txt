@@ -1,0 +1,2 @@
+Use port-forward to inspect the release:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "mlops-search.name" . }} 8080:{{ .Values.service.port }}

@@ -1,0 +1,173 @@
+name: mlops-search-ci-cd
+run-name: Run test quality, build image and push to prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      ranking_mode:
+        description: 'Ranking mode for testing CI/CD.'
+        required: true
+        default: 'normal'
+        type: choice
+        options: ['normal', 'reverse']
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  KUBECONFIG: kubeconfig
+  HELM_DRIVER: configmap
+  KUBE_NAMESPACE: itmo-student-07
+  IMAGE: ghcr.io/zavierwaffle/runbook-search-api
+
+concurrency:
+  group: mlops-search-ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-quality:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create Virtual Environment, build indexes, run tests, get quality and quality-reverse report
+        run: make ci-cd
+
+      - name: Upload quality reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-reports
+          path: |
+            evaluate-report.json
+            evaluate-reverse-report.json
+            artifacts/metadata.json
+
+  build:
+    needs: test-quality
+    runs-on: self-hosted
+
+    outputs:
+      digest: '${{ steps.build_docker_image_and_push_to_registry.outputs.digest }}'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: '${{ github.actor }}'
+          password: '${{ secrets.GITHUB_TOKEN }}'
+
+      - name: Build Docker image and push to registry
+        id: build_docker_image_and_push_to_registry
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: '${{ env.IMAGE }}:${{ github.sha }}'
+
+  deploy-staging:
+    needs: build
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup release name
+        run: |
+          echo "RELEASE=${{ env.KUBE_NAMESPACE }}-search-staging" >> $GITHUB_ENV
+
+      - name: Setup kube's private config
+        id: setup_kube_private_config
+        run: |
+          echo "${{ secrets.KUBE_PRIVATE_CONFIG }}" | base64 -d > kubeconfig
+          kubectl auth can-i get pods -n "$NAMESPACE"
+
+      - name: Run linter
+        run: |
+          helm lint helm/mlops-search \
+            --set image.repository="$IMAGE" \
+            --set image.digest='${{ needs.build.outputs.digest }}'
+
+      - name: Run template
+        run: |
+          helm template "$RELEASE" helm/mlops-search -n "$NAMESPACE" \
+            --set image.repository="$IMAGE" \
+            --set image.digest='${{ needs.build.outputs.digest }}'
+
+      - name: Get last success revision
+        run: helm history "$RELEASE" -n "$NAMESPACE" -o json | jq -r '.[-1].revision // 0' > last-revision.txt
+
+      - name: Upgrade
+        run: |
+          helm upgrade --install "$RELEASE" helm/mlops-search -n "$NAMESPACE" \
+            --set image.repository="$IMAGE" \
+            --set image.digest='${{ needs.build.outputs.digest }}' \
+            --set environment=staging \
+            --set buildRevision='${{ github.sha }}' \
+            --set rankingMode=normal \
+            --wait
+
+      - name: Test
+        run: |
+          helm test "$RELEASE" -n "$NAMESPACE"
+
+      - name: Verify release
+        run: |
+          if ! python3 scripts/verify_release.py --release "$RELEASE" --namespace "$NAMESPACE"
+          then
+            r=$(cat last-revision.txt)
+            helm rollback "$RELEASE" "$r" -n "$NAMESPACE" --wait
+            exit 1
+          fi
+
+      - name: Show history
+        if: ${{ steps.setup_kube_private_config.outcome == 'success' }}
+        run: helm history "$RELEASE" -n "$NAMESPACE"
+
+  promote-production:
+    needs: [build, deploy-staging]
+    runs-on: self-hosted
+
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup release name
+        run: |
+          echo "RELEASE=${{ env.KUBE_NAMESPACE }}-search-prod" >> $GITHUB_ENV
+
+      - name: Setup kube's private config
+        id: setup_kube_private_config
+        run: |
+          echo "${{ secrets.KUBE_PRIVATE_CONFIG }}" | base64 -d > kubeconfig
+          kubectl auth can-i get pods -n "$NAMESPACE"
+
+      - name: Get last success revision
+        run: helm history "$RELEASE" -n "$NAMESPACE" -o json | jq -r '.[-1].revision // 0' > last-revision.txt
+
+      - name: Upgrade
+        run: |
+          helm upgrade --install "$RELEASE" helm/mlops-search -n "$NAMESPACE" \
+            --set image.repository="$IMAGE" \
+            --set image.digest='${{ needs.build.outputs.digest }}' \
+            --set environment=production \
+            --set buildRevision='${{ github.sha }}' \
+            --set rankingMode='${{ github.event.inputs.ranking_mode }}' \
+            --wait
+
+      - name: Verify release
+        run: |
+          if ! python3 scripts/verify_release.py --release "$RELEASE" --namespace "$NAMESPACE"
+          then
+            r=$(cat last-revision.txt)
+            helm rollback "$RELEASE" "$r" -n "$NAMESPACE" --wait
+            exit 1
+          fi
+
+      - name: Show history
+        if: ${{ steps.setup_kube_private_config.outcome == 'success' }}
+        run: helm history "$RELEASE" -n "$NAMESPACE"
