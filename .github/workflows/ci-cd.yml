@@ -20,6 +20,7 @@ env:
   HELM_DRIVER: configmap
   KUBE_NAMESPACE: itmo-student-07
   IMAGE: ghcr.io/zavierwaffle/runbook-search-api
+  NAMESPACE: mlops-students
 
 concurrency:
   group: mlops-search-ci-cd-${{ github.ref }}
@@ -83,7 +84,7 @@ jobs:
         id: setup_kube_private_config
         run: |
           echo "${{ secrets.KUBE_PRIVATE_CONFIG }}" | base64 -d > kubeconfig
-          kubectl auth can-i get pods -n "$KUBE_NAMESPACE"
+          kubectl auth can-i get pods -n "$NAMESPACE"
 
       - name: Run linter
         run: |
@@ -93,16 +94,16 @@ jobs:
 
       - name: Run template
         run: |
-          helm template "$RELEASE" helm/mlops-search -n "$KUBE_NAMESPACE" \
+          helm template "$RELEASE" helm/mlops-search -n "$NAMESPACE" \
             --set image.repository="$IMAGE" \
             --set image.digest='${{ needs.build.outputs.digest }}'
 
       - name: Get last success revision
-        run: helm history "$RELEASE" -n "$KUBE_NAMESPACE" -o json | jq -r '.[-1].revision // 0' > last-revision.txt
+        run: helm history "$RELEASE" -n "$NAMESPACE" -o json | jq -r '.[-1].revision // 0' > last-revision.txt
 
       - name: Upgrade
         run: |
-          helm upgrade --install "$RELEASE" helm/mlops-search -n "$KUBE_NAMESPACE" \
+          helm upgrade --install "$RELEASE" helm/mlops-search -n "$NAMESPACE" \
             --set image.repository="$IMAGE" \
             --set image.digest='${{ needs.build.outputs.digest }}' \
             --set environment=staging \
@@ -112,20 +113,20 @@ jobs:
 
       - name: Test
         run: |
-          helm test "$RELEASE" -n "$KUBE_NAMESPACE"
+          helm test "$RELEASE" -n "$NAMESPACE"
 
       - name: Verify release
         run: |
-          if ! python3 scripts/verify_release.py --release "$RELEASE" --namespace "$KUBE_NAMESPACE"
+          if ! python3 scripts/verify_release.py --release "$RELEASE" --namespace "$NAMESPACE"
           then
             r=$(cat last-revision.txt)
-            helm rollback "$RELEASE" "$r" -n "$KUBE_NAMESPACE" --wait
+            helm rollback "$RELEASE" "$r" -n "$NAMESPACE" --wait
             exit 1
           fi
 
       - name: Show history
         if: ${{ steps.setup_kube_private_config.outcome == 'success' }}
-        run: helm history "$RELEASE" -n "$KUBE_NAMESPACE"
+        run: helm history "$RELEASE" -n "$NAMESPACE"
 
   promote-production:
     needs: [build, deploy-staging]
@@ -144,14 +145,14 @@ jobs:
         id: setup_kube_private_config
         run: |
           echo "${{ secrets.KUBE_PRIVATE_CONFIG }}" | base64 -d > kubeconfig
-          kubectl auth can-i get pods -n "$KUBE_NAMESPACE"
+          kubectl auth can-i get pods -n "$NAMESPACE"
 
       - name: Get last success revision
-        run: helm history "$RELEASE" -n "$KUBE_NAMESPACE" -o json | jq -r '.[-1].revision // 0' > last-revision.txt
+        run: helm history "$RELEASE" -n "$NAMESPACE" -o json | jq -r '.[-1].revision // 0' > last-revision.txt
 
       - name: Upgrade
         run: |
-          helm upgrade --install "$RELEASE" helm/mlops-search -n "$KUBE_NAMESPACE" \
+          helm upgrade --install "$RELEASE" helm/mlops-search -n "$NAMESPACE" \
             --set image.repository="$IMAGE" \
             --set image.digest='${{ needs.build.outputs.digest }}' \
             --set environment=production \
@@ -161,13 +162,13 @@ jobs:
 
       - name: Verify release
         run: |
-          if ! python3 scripts/verify_release.py --release "$RELEASE" --namespace "$KUBE_NAMESPACE"
+          if ! python3 scripts/verify_release.py --release "$RELEASE" --namespace "$NAMESPACE"
           then
             r=$(cat last-revision.txt)
-            helm rollback "$RELEASE" "$r" -n "$KUBE_NAMESPACE" --wait
+            helm rollback "$RELEASE" "$r" -n "$NAMESPACE" --wait
             exit 1
           fi
 
       - name: Show history
         if: ${{ steps.setup_kube_private_config.outcome == 'success' }}
-        run: helm history "$RELEASE" -n "$KUBE_NAMESPACE"
+        run: helm history "$RELEASE" -n "$NAMESPACE"
