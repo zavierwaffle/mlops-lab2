@@ -127,7 +127,7 @@ jobs:
           fi
 
       - name: Show history
-        if: ${{ steps.setup_kube_private_config.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup_kube_private_config.outcome == 'success' }}
         run: helm history "$RELEASE" -n "$KUBE_NAMESPACE"
 
   promote-production:
@@ -173,5 +173,5 @@ jobs:
           fi
 
       - name: Show history
-        if: ${{ steps.setup_kube_private_config.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.setup_kube_private_config.outcome == 'success' }}
         run: helm history "$RELEASE" -n "$KUBE_NAMESPACE"
