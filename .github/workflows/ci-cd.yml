@@ -2,8 +2,8 @@ name: mlops-search-ci-cd
 run-name: Run test quality, build image and push to prod
 
 on:
-  push:
-    branches: [master]
+  # push:
+  #   branches: [master]
   workflow_dispatch:
     inputs:
       ranking_mode:
