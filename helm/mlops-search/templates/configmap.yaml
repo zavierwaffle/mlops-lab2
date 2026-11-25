@@ -9,5 +9,5 @@ data:
   APP_VERSION: {{ .Chart.AppVersion | quote }}
   BUILD_REVISION: {{ .Values.buildRevision | quote }}
   ENVIRONMENT: {{ .Values.environment | quote }}
-  RANKING_MODE: {{ .Values.rankingMode | quote }}
+  RANKING_MODE: {{ include "mlops-search.ranking-mode" . | quote }}
   IMAGE_DIGEST: {{ .Values.image.digest | quote }}
